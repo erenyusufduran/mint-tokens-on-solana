@@ -1,6 +1,13 @@
 import { initializeKeypair } from "./initializeKeypair";
 import * as web3 from "@solana/web3.js";
 import * as token from "@solana/spl-token";
+import { Metaplex, keypairIdentity, bundlrStorage, toMetaplexFile, findMetadataPda } from "@metaplex-foundation/js";
+import {
+  DataV2,
+  createCreateMetadataAccountV2Instruction,
+  createUpdateMetadataAccountV2Instruction,
+} from "@metaplex-foundation/mpl-token-metadata";
+import fs from "fs";
 
 async function main() {
   const connection = new web3.Connection(web3.clusterApiUrl("devnet"));
@@ -8,14 +15,36 @@ async function main() {
 
   console.log("PublicKey: ", user.publicKey.toBase58());
 
-  const mint = await createNewMint(connection, user, user.publicKey, user.publicKey, 2);
-  const tokenAccount = await createTokenAccount(connection, user, mint, user.publicKey);
-  await mintTokens(connection, user, mint, tokenAccount.address, user, 100);
+  const MINT_ADDRESS = "9b61WztRtuXJ5ksDNshEr11VG4G1VaFPVs3ua7UuHHAr";
 
-  const receiver = web3.Keypair.generate().publicKey;
-  const receiverTokenAccount = await createTokenAccount(connection, user, mint, receiver);
-  await transferTokens(connection, user, tokenAccount.address, receiverTokenAccount.address, user.publicKey, 50, mint);
-  await burnTokens(connection, user, tokenAccount.address, mint, user, 25);
+  // const mint = await createNewMint(connection, user, user.publicKey, user.publicKey, 2);
+  // const tokenAccount = await createTokenAccount(connection, user, mint, user.publicKey);
+  // await mintTokens(connection, user, mint, tokenAccount.address, user, 100);
+
+  // const receiver = web3.Keypair.generate().publicKey;
+  // const receiverTokenAccount = await createTokenAccount(connection, user, mint, receiver);
+  // await transferTokens(connection, user, tokenAccount.address, receiverTokenAccount.address, user.publicKey, 50, mint);
+  // await burnTokens(connection, user, tokenAccount.address, mint, user, 25);
+
+  const metaplex = Metaplex.make(connection)
+    .use(keypairIdentity(user))
+    .use(
+      bundlrStorage({
+        address: "https://devnet.bundlr.network",
+        providerUrl: "https://api.devnet.solana.com",
+        timeout: 60000,
+      })
+    );
+
+  await createTokenMetadata(
+    connection,
+    metaplex,
+    new web3.PublicKey(MINT_ADDRESS),
+    user,
+    "Pizza",
+    "PZA",
+    "Whoever hols this token is invited to my party."
+  );
 }
 
 async function createNewMint(
@@ -94,6 +123,76 @@ async function burnTokens(
 ) {
   const transactionSignature = await token.burn(connection, payer, account, mint, owner, amount);
   console.log(`Burn Transaction: https://explorer.solana.com/tx/${transactionSignature}?cluster=devnet`);
+}
+
+async function createTokenMetadata(
+  connection: web3.Connection,
+  metaplex: Metaplex,
+  mint: web3.PublicKey,
+  user: web3.Keypair,
+  name: string,
+  symbol: string,
+  description: string
+) {
+  // file to buffer
+  const buffer = fs.readFileSync("assets/pizza.png");
+
+  // buffer to metaplex file
+  const file = toMetaplexFile(buffer, "pizza.png");
+
+  // upload image and get image uri
+  const imageUri = await metaplex.storage().upload(file);
+  console.log("image uri:", imageUri);
+
+  // upload metadata and get metadata uri (off chain metadata)
+  const { uri } = await metaplex
+    .nfts()
+    .uploadMetadata({
+      name: name,
+      description: description,
+      image: imageUri,
+    })
+    .run();
+
+  console.log("metadata uri:", uri);
+
+  // get metadata account address
+  const metadataPDA = findMetadataPda(mint);
+
+  // onchain metadata format
+  const tokenMetadata = {
+    name: name,
+    symbol: symbol,
+    uri: uri,
+    sellerFeeBasisPoints: 0,
+    creators: null,
+    collection: null,
+    uses: null,
+  } as DataV2;
+
+  // transaction to create metadata account
+  const transaction = new web3.Transaction().add(
+    createCreateMetadataAccountV2Instruction(
+      {
+        metadata: metadataPDA,
+        mint: mint,
+        mintAuthority: user.publicKey,
+        payer: user.publicKey,
+        updateAuthority: user.publicKey,
+      },
+      {
+        createMetadataAccountArgsV2: {
+          data: tokenMetadata,
+          isMutable: true,
+        },
+      }
+    )
+  );
+
+  // send transaction
+  const transactionSignature = await web3.sendAndConfirmTransaction(connection, transaction, [user]);
+
+  console.log(`Create Metadata Account: https://explorer.solana.com/tx/${transactionSignature}?cluster=devnet`);
 }
 
 main()
