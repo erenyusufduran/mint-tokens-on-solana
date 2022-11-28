@@ -45,6 +45,16 @@ async function main() {
     "PZA",
     "Whoever hols this token is invited to my party."
   );
+
+  await updateTokenMetadata(
+    connection,
+    metaplex,
+    new web3.PublicKey(MINT_ADDRESS),
+    user,
+    "PIZZA",
+    "PIZ",
+    "Who wants to be a PIZZA?"
+  );
 }
 
 async function createNewMint(
@@ -193,6 +203,55 @@ async function createTokenMetadata(
   const transactionSignature = await web3.sendAndConfirmTransaction(connection, transaction, [user]);
 
   console.log(`Create Metadata Account: https://explorer.solana.com/tx/${transactionSignature}?cluster=devnet`);
+}
+
+async function updateTokenMetadata(
+  connection: web3.Connection,
+  metaplex: Metaplex,
+  mint: web3.PublicKey,
+  user: web3.Keypair,
+  name: string,
+  symbol: string,
+  description: string
+) {
+  const buffer = fs.readFileSync("assets/new-pizza.png");
+  const file = toMetaplexFile(buffer, "pizza.png");
+  const imageUri = await metaplex.storage().upload(file);
+
+  const { uri } = await metaplex
+    .nfts()
+    .uploadMetadata({
+      name: name,
+      description: description,
+      image: imageUri,
+    })
+    .run();
+
+  const metadataPDA = findMetadataPda(mint);
+
+  const tokenMetadata = {
+    name: name,
+    symbol: symbol,
+    uri: uri,
+    sellerFeeBasisPoints: 0,
+    creators: null,
+    collection: null,
+    uses: null,
+  } as DataV2;
+
+  const transaction = new web3.Transaction().add(
+    createUpdateMetadataAccountV2Instruction(
+      { metadata: metadataPDA, updateAuthority: user.publicKey },
+      {
+        updateMetadataAccountArgsV2: {
+          data: tokenMetadata,
+          updateAuthority: user.publicKey,
+          primarySaleHappened: true,
+          isMutable: true,
+        },
+      }
+    )
+  );
 }
 
 main()
